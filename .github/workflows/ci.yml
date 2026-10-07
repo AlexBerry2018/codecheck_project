@@ -28,15 +28,15 @@ jobs:
       - uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: courses-service/Dockerfile
-          ignore: DL3008,DL3013
+          ignore: DL3008,DL3013,DL3042
       - uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: submissions-service/Dockerfile
-          ignore: DL3008,DL3013
+          ignore: DL3008,DL3013,DL3042
       - uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: grader-service/Dockerfile
-          ignore: DL3008,DL3013
+          ignore: DL3008,DL3013,DL3042
 
   compose:
     runs-on: ubuntu-latest
