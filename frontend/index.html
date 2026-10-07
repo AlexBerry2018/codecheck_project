@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeCheck</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2128; --mute:#667085; --line:#d9dde3; --accent:#2457d6;
+          --ok:#127a3d; --bad:#b42318; --warn:#9a6700; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171c; --card:#1c2128; --ink:#e6e9ee; --mute:#98a2b3; --line:#323944; --accent:#6f9bff;
+            --ok:#4cc38a; --bad:#ff7b72; --warn:#e3b341; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 20px; background:var(--card);
+           border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:18px; }
+  header .grow { flex:1; }
+  main { max-width:980px; margin:0 auto; padding:20px 16px 60px; display:grid; gap:16px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+  h2 { margin:0 0 10px; font-size:16px; }
+  label { display:block; font-size:13px; color:var(--mute); margin:8px 0 3px; }
+  input, select, textarea { width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px;
+          background:var(--bg); color:var(--ink); font:inherit; }
+  textarea { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size:13px; min-height:130px; }
+  button { padding:7px 14px; border:1px solid var(--accent); background:var(--accent); color:#fff; border-radius:6px;
+           font:inherit; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); }
+  button:disabled { opacity:.55; cursor:default; }
+  .row { display:flex; flex-wrap:wrap; gap:12px; } .row > * { flex:1 1 200px; }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--mute); font-weight:500; }
+  code, pre { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size:13px; }
+  pre { margin:0; white-space:pre-wrap; word-break:break-word; }
+  .mute { color:var(--mute); } .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; border:1px solid var(--line); font-size:12px; }
+  #toast { position:fixed; right:16px; bottom:16px; max-width:360px; padding:10px 14px; border-radius:8px;
+           background:var(--ink); color:var(--bg); display:none; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CodeCheck</h1>
+  <span class="grow"></span>
+  <label for="base" style="margin:0">API</label>
+  <input id="base" style="width:230px" value="http://localhost:8000">
+  <span id="who" class="pill" hidden></span>
+  <button id="logout" class="ghost" hidden>Выйти</button>
+</header>
+
+<main>
+  <section id="auth">
+    <h2>Вход</h2>
+    <div class="row">
+      <div><label for="email">Email</label><input id="email" type="email" autocomplete="username"></div>
+      <div><label for="password">Пароль (от 8 символов)</label><input id="password" type="password" autocomplete="current-password"></div>
+    </div>
+    <div class="row">
+      <div><label for="role">Роль при регистрации</label>
+        <select id="role"><option value="student">student</option><option value="teacher">teacher</option></select></div>
+      <div><label for="invite">Код преподавателя</label><input id="invite" placeholder="только для teacher"></div>
+    </div>
+    <div class="actions"><button id="login">Войти</button><button id="register" class="ghost">Зарегистрироваться</button></div>
+  </section>
+
+  <section id="courses" hidden>
+    <h2>Курсы</h2>
+    <div id="course-list" class="mute">Загрузка…</div>
+    <div id="course-new" hidden>
+      <label for="course-title">Новый курс</label>
+      <div class="row"><input id="course-title" placeholder="Название"><button id="course-create" style="flex:0 0 auto">Создать</button></div>
+    </div>
+  </section>
+
+  <section id="assignments" hidden>
+    <h2 id="assignments-title">Задания</h2>
+    <div id="assignment-list"></div>
+    <div id="assignment-new" hidden>
+      <h2 style="margin-top:16px">Новое задание</h2>
+      <label for="a-title">Название</label><input id="a-title" value="Сумма двух чисел">
+      <label for="a-desc">Описание</label><input id="a-desc" value="Прочитайте два числа и выведите их сумму.">
+      <div class="row">
+        <div><label for="a-time">Лимит времени, мс</label><input id="a-time" type="number" value="2000"></div>
+        <div><label for="a-mem">Лимит памяти, МБ</label><input id="a-mem" type="number" value="128"></div>
+      </div>
+      <label for="a-tests">Тесты (JSON: stdin, expected_stdout, is_hidden)</label>
+      <textarea id="a-tests"></textarea>
+      <div class="actions"><button id="assignment-create">Создать задание</button></div>
+    </div>
+  </section>
+
+  <section id="work" hidden>
+    <h2 id="work-title">Решение</h2>
+    <div id="work-info" class="mute"></div>
+    <label for="code">Код (Python)</label>
+    <textarea id="code"></textarea>
+    <label for="file">…или файл .py (если выбран, берётся он)</label>
+    <input id="file" type="file" accept=".py,text/plain">
+    <div class="actions">
+      <button id="send">Отправить на проверку</button>
+      <button id="board" class="ghost">Рейтинг</button>
+      <button id="history" class="ghost">Мои попытки</button>
+      <button id="regrade" class="ghost" hidden>Перепроверить всё</button>
+    </div>
+    <div id="result" style="margin-top:14px"></div>
+  </section>
+</main>
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+const $ = (sel) => document.querySelector(sel);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+
+const SAMPLE_TESTS = JSON.stringify([
+  { stdin: "1 2\n", expected_stdout: "3" },
+  { stdin: "10 20\n", expected_stdout: "30" },
+  { stdin: "-5 5\n", expected_stdout: "0", is_hidden: true },
+], null, 2);
+const SAMPLE_CODE = "a, b = map(int, input().split())\nprint(a + b)\n";
+
+const state = { access: null, refresh: null, user: null, course: null, assignment: null, key: null, poll: 0 };
+
+// ---------------------------------------------------------------- api
+class ApiError extends Error {
+  constructor(status, message, retryAfter) { super(message); this.status = status; this.retryAfter = retryAfter; }
+}
+const base = () => $("#base").value.replace(/\/+$/, "");
+
+async function rawFetch(path, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (state.access) headers.Authorization = "Bearer " + state.access;
+  let body;
+  if (opts.json !== undefined) { headers["Content-Type"] = "application/json"; body = JSON.stringify(opts.json); }
+  if (opts.form) body = opts.form;
+  return fetch(base() + path, { method: opts.method || "GET", headers, body });
+}
+
+async function api(path, opts = {}) {
+  let resp = await rawFetch(path, opts);
+  if (resp.status === 401 && state.refresh && !opts.noRefresh && await refreshTokens()) resp = await rawFetch(path, opts);
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    const msg = (data && data.error && data.error.message) || (data && data.message) || resp.statusText || "ошибка";
+    const details = data && data.error && data.error.details ? " (" + data.error.details.join("; ") + ")" : "";
+    throw new ApiError(resp.status, msg + details, resp.headers.get("Retry-After"));
+  }
+  return { data, headers: resp.headers, status: resp.status };
+}
+
+async function refreshTokens() {
+  try {
+    const resp = await fetch(base() + "/api/auth/refresh", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: state.refresh }) });
+    if (!resp.ok) throw new Error("refresh failed");
+    setTokens(await resp.json());
+    return true;
+  } catch (_) { signOut(); return false; }
+}
+
+// ---------------------------------------------------------------- session
+function claims(token) {
+  try { return JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); } catch (_) { return {}; }
+}
+function setTokens(pair) {
+  state.access = pair.access_token; state.refresh = pair.refresh_token;
+  const c = claims(state.access);
+  state.user = { id: Number(c.sub), role: c.role };
+  sessionStorage.setItem("cc_refresh", state.refresh);
+  render();
+}
+function signOut() {
+  state.access = state.refresh = state.user = null; state.course = state.assignment = null;
+  sessionStorage.removeItem("cc_refresh");
+  render();
+}
+const isStaff = () => state.user && (state.user.role === "teacher" || state.user.role === "admin");
+
+function toast(text, bad) {
+  const el = $("#toast"); el.textContent = text; el.style.display = "block";
+  el.style.background = bad ? "var(--bad)" : "var(--ink)"; el.style.color = bad ? "#fff" : "var(--bg)";
+  clearTimeout(toast.t); toast.t = setTimeout(() => { el.style.display = "none"; }, bad ? 6000 : 3000);
+}
+const guard = (fn) => async (...args) => {
+  try { await fn(...args); } catch (e) {
+    const wait = e.retryAfter ? ` Повторите через ${e.retryAfter} с.` : "";
+    toast(e instanceof ApiError ? `${e.status}: ${e.message}.${wait}` : `Нет связи с API: ${e.message}`, true);
+  }
+};
+
+// ---------------------------------------------------------------- views
+function render() {
+  const authed = !!state.user;
+  $("#auth").hidden = authed; $("#courses").hidden = !authed;
+  $("#who").hidden = $("#logout").hidden = !authed;
+  if (authed) $("#who").textContent = `#${state.user.id} · ${state.user.role}`;
+  $("#course-new").hidden = !isStaff();
+  $("#assignment-new").hidden = !isStaff();
+  $("#assignments").hidden = !authed || !state.course;
+  $("#work").hidden = !authed || !state.assignment;
+  $("#regrade").hidden = !isStaff();
+  if (authed && !render.loaded) { render.loaded = true; loadCourses(); }
+  if (!authed) render.loaded = false;
+}
+
+const loadCourses = guard(async () => {
+  const { data } = await api("/api/courses");
+  $("#course-list").innerHTML = data.length ? `<table><tr><th>#</th><th>Курс</th><th></th></tr>${data.map((c) =>
+    `<tr><td>${c.id}</td><td>${esc(c.title)} ${c.mine ? '<span class="pill">мой</span>' : ""}</td><td>
+     ${state.user.role === "student" && !c.enrolled ? `<button class="ghost" data-enroll="${c.id}">Записаться</button> ` : ""}
+     <button class="ghost" data-course="${c.id}" data-title="${esc(c.title)}">Задания</button></td></tr>`).join("")}</table>`
+    : '<span class="mute">Курсов пока нет.</span>';
+});
+
+const openCourse = guard(async (id, title) => {
+  state.course = { id, title }; state.assignment = null;
+  $("#assignments-title").textContent = `Задания: ${title}`;
+  render();
+  try {
+    const { data } = await api(`/api/courses/${id}/assignments`);
+    $("#assignment-list").innerHTML = data.length ? `<table><tr><th>#</th><th>Задание</th><th>Тестов</th><th></th></tr>${data.map((a) =>
+      `<tr><td>${a.id}</td><td>${esc(a.title)} ${a.is_open ? "" : '<span class="pill">закрыто</span>'}</td>
+       <td>${a.tests_total}</td><td><button class="ghost" data-assignment="${a.id}">Открыть</button></td></tr>`).join("")}</table>`
+      : '<span class="mute">Заданий пока нет.</span>';
+  } catch (e) {
+    $("#assignment-list").innerHTML = '<span class="warn">Сначала запишитесь на курс.</span>';
+    throw e;
+  }
+  if (!$("#a-tests").value) $("#a-tests").value = SAMPLE_TESTS;
+});
+
+const openAssignment = guard(async (id) => {
+  const { data: a } = await api(`/api/assignments/${id}`);
+  state.assignment = a; state.key = null; $("#result").innerHTML = "";
+  $("#work-title").textContent = `Решение: ${a.title}`;
+  const shown = (a.tests || []).map((t) => `<tr><td><pre>${esc(t.stdin)}</pre></td><td><pre>${esc(t.expected_stdout)}</pre></td></tr>`).join("");
+  $("#work-info").innerHTML = `${esc(a.description)}<br>Лимит: ${a.time_limit_ms} мс, ${a.memory_limit_mb} МБ · тестов: ${a.tests_total}
+    (скрытых: ${a.hidden_tests}) · версия тестов ${a.tests_version}${a.deadline ? " · дедлайн " + esc(a.deadline) : ""}
+    ${shown ? `<table style="margin-top:8px"><tr><th>Ввод (пример)</th><th>Ожидаемый вывод</th></tr>${shown}</table>` : ""}`;
+  if (!$("#code").value) $("#code").value = SAMPLE_CODE;
+  render(); $("#work").scrollIntoView({ behavior: "smooth" });
+});
+
+const verdictClass = (v) => (v === "accepted" ? "ok" : v === "system_error" ? "warn" : "bad");
+
+function renderSubmission(s) {
+  const done = s.status !== "queued";
+  const tests = (s.tests || []).map((t) => `<tr><td>${t.index + 1}${t.hidden ? " (скрытый)" : ""}</td>
+    <td class="${verdictClass(t.verdict)}">${esc(t.verdict)}</td><td>${t.time_ms} мс</td>
+    <td>${t.hidden ? "" : `<pre>${esc(t.stdout ?? "")}${t.stderr ? "\n" + esc(t.stderr) : ""}</pre>`}</td></tr>`).join("");
+  $("#result").innerHTML = `<div>Решение #${s.id}: <b class="${done ? verdictClass(s.verdict) : "mute"}">${done ? esc(s.verdict) : "в очереди…"}</b>
+    ${done ? ` · пройдено ${s.tests_passed ?? 0} из ${s.tests_total ?? 0}` : ""}</div>
+    ${tests ? `<table style="margin-top:8px"><tr><th>Тест</th><th>Вердикт</th><th>Время</th><th>Вывод</th></tr>${tests}</table>` : ""}`;
+  return done;
+}
+
+async function waitForVerdict(id) {
+  const ticket = ++state.poll;
+  for (let i = 0; i < 90 && ticket === state.poll; i++) {
+    const { data } = await api(`/api/submissions/${id}`);
+    if (renderSubmission(data)) return;
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+
+const send = guard(async () => {
+  const form = new FormData();
+  form.append("assignment_id", state.assignment.id);
+  const file = $("#file").files[0];
+  if (file) form.append("file", file, file.name); else form.append("code", $("#code").value);
+  state.key = state.key || uuid();      // a retry after a network error reuses the key: no duplicate submission
+  $("#send").disabled = true;
+  try {
+    const { data, headers } = await api("/api/submissions", { method: "POST", form, headers: { "Idempotency-Key": state.key } });
+    state.key = null;
+    if (headers.get("Idempotent-Replay")) toast("Это повтор уже принятой отправки");
+    renderSubmission(data);
+    await waitForVerdict(data.id);
+  } finally { $("#send").disabled = false; }
+});
+
+const showBoard = guard(async () => {
+  const { data } = await api(`/api/leaderboard/${state.assignment.id}`);
+  $("#result").innerHTML = data.entries.length ? `<table><tr><th>Место</th><th>Студент</th><th>Балл</th></tr>${data.entries.map((e) =>
+    `<tr><td>${e.rank}</td><td>#${e.user_id}${e.user_id === state.user.id ? " (вы)" : ""}</td><td>${e.score}</td></tr>`).join("")}</table>`
+    : '<span class="mute">Пока нет проверенных решений.</span>';
+});
+
+const showHistory = guard(async () => {
+  state.poll++;
+  const { data } = await api(`/api/submissions?assignment_id=${state.assignment.id}`);
+  $("#result").innerHTML = data.length ? `<table><tr><th>#</th><th>Когда</th><th>Статус</th></tr>${data.map((s) =>
+    `<tr><td>${s.id}</td><td>${esc(new Date(s.created_at).toLocaleString())}</td>
+     <td class="${s.status === "queued" ? "mute" : verdictClass(s.verdict)}">${esc(s.status)}</td></tr>`).join("")}</table>`
+    : '<span class="mute">Попыток пока нет.</span>';
+});
+
+const regrade = guard(async () => {
+  const { data } = await api(`/api/submissions/assignments/${state.assignment.id}/regrade`, { method: "POST" });
+  toast(`Перепроверка: в очередь поставлено ${data.queued}, без исходника ${data.skipped_no_source}`);
+});
+
+// ---------------------------------------------------------------- wiring
+$("#base").value = localStorage.getItem("cc_base") || $("#base").value;
+$("#base").addEventListener("change", () => localStorage.setItem("cc_base", $("#base").value));
+$("#a-tests").value = SAMPLE_TESTS;
+
+const credentials = () => ({ email: $("#email").value.trim(), password: $("#password").value });
+$("#login").addEventListener("click", guard(async () => {
+  const { data } = await api("/api/auth/login", { method: "POST", json: credentials(), noRefresh: true });
+  setTokens(data);
+}));
+$("#register").addEventListener("click", guard(async () => {
+  const body = { ...credentials(), role: $("#role").value };
+  if (body.role === "teacher") body.invite_code = $("#invite").value;
+  await api("/api/auth/register", { method: "POST", json: body, noRefresh: true });
+  toast("Аккаунт создан, теперь войдите");
+}));
+$("#logout").addEventListener("click", signOut);
+
+$("#course-create").addEventListener("click", guard(async () => {
+  await api("/api/courses", { method: "POST", json: { title: $("#course-title").value } });
+  $("#course-title").value = ""; await loadCourses();
+}));
+$("#course-list").addEventListener("click", guard(async (ev) => {
+  const t = ev.target;
+  if (t.dataset.enroll) { await api(`/api/courses/${t.dataset.enroll}/enroll`, { method: "POST" }); toast("Вы записаны на курс"); await loadCourses(); }
+  if (t.dataset.course) await openCourse(Number(t.dataset.course), t.dataset.title);
+}));
+$("#assignment-create").addEventListener("click", guard(async () => {
+  let tests;
+  try { tests = JSON.parse($("#a-tests").value); } catch (_) { throw new Error("тесты: невалидный JSON"); }
+  await api(`/api/courses/${state.course.id}/assignments`, { method: "POST", json: {
+    title: $("#a-title").value, description: $("#a-desc").value, tests,
+    time_limit_ms: Number($("#a-time").value), memory_limit_mb: Number($("#a-mem").value) } });
+  toast("Задание создано"); await openCourse(state.course.id, state.course.title);
+}));
+$("#assignment-list").addEventListener("click", (ev) => { if (ev.target.dataset.assignment) openAssignment(Number(ev.target.dataset.assignment)); });
+$("#code").addEventListener("input", () => { state.key = null; });   // new text = new submission
+$("#file").addEventListener("change", () => { state.key = null; });
+$("#send").addEventListener("click", send);
+$("#board").addEventListener("click", showBoard);
+$("#history").addEventListener("click", showHistory);
+$("#regrade").addEventListener("click", regrade);
+
+// a reload keeps the session: the short-lived access token is re-issued from the refresh token
+state.refresh = sessionStorage.getItem("cc_refresh");
+if (state.refresh) refreshTokens().then((ok) => { if (!ok) render(); }); else render();
+</script>
+</body>
+</html>

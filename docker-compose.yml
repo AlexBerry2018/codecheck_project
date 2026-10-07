@@ -1,0 +1,223 @@
+name: codecheck
+
+x-common-env: &common-env
+  JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-dev-only-change-me-0123456789}
+  INTERNAL_TOKEN: ${INTERNAL_TOKEN:-dev-internal-token}
+  KAFKA_BOOTSTRAP: kafka:9092
+  VALKEY_URL: redis://valkey:6379/0
+
+services:
+  # ---------------------------------------------------------------- data
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # 127.0.0.1 forces TCP: the temporary init server only listens on a unix socket
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  mongo:
+    image: mongo:7
+    volumes:
+      - mongodata:/data/db
+    ports:
+      - "127.0.0.1:${MONGO_PORT:-27017}:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  valkey:
+    image: valkey/valkey:8
+    # volatile-lru: only keys with a TTL can be evicted (leaderboards have none)
+    command: ["valkey-server", "--maxmemory", "256mb", "--maxmemory-policy", "volatile-lru", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${VALKEY_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------------------------------------------------------------- broker
+  kafka:
+    image: apache/kafka:3.9.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      # EXTERNAL is for clients on the host machine (localhost:29092); containers keep using kafka:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168   # 7 days, see NFR-11
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    ports:
+      - "127.0.0.1:${KAFKA_PORT:-29092}:29092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+  kafka-init:
+    image: apache/kafka:3.9.0
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        T=/opt/kafka/bin/kafka-topics.sh
+        B=kafka:9092
+        $$T --bootstrap-server $$B --create --if-not-exists --topic assignment.updated        --partitions 3 --replication-factor 1
+        $$T --bootstrap-server $$B --create --if-not-exists --topic submission.created        --partitions 6 --replication-factor 1
+        $$T --bootstrap-server $$B --create --if-not-exists --topic submission.created.retry  --partitions 6 --replication-factor 1
+        $$T --bootstrap-server $$B --create --if-not-exists --topic submission.created.dlq    --partitions 1 --replication-factor 1
+        $$T --bootstrap-server $$B --create --if-not-exists --topic submission.graded         --partitions 6 --replication-factor 1
+        $$T --bootstrap-server $$B --list
+
+  # Web UI for topics, messages, consumer groups and lag: http://localhost:8081
+  # Read-only on purpose (no topic deletes or message produces from the UI); published on
+  # loopback only, because the UI has no login.
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    environment:
+      KAFKA_CLUSTERS_0_NAME: codecheck
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_READONLY: "true"
+      DYNAMIC_CONFIG_ENABLED: "false"
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------- services
+  courses-service:
+    build: ./courses-service
+    environment:
+      <<: *common-env
+      DATABASE_URL: postgresql://courses:courses@postgres:5432/courses_db
+      TEACHER_INVITE_CODE: ${TEACHER_INVITE_CODE:-teacher-invite}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@codecheck.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-change-me}
+    # direct access without Kong (no rate limit, JWT is still checked by the service); loopback only
+    ports:
+      - "127.0.0.1:${COURSES_PORT:-8001}:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  submissions-service:
+    build: ./submissions-service
+    environment:
+      <<: *common-env
+      DATABASE_URL: postgresql://submissions:submissions@postgres:5432/submissions_db
+      MONGO_URL: mongodb://mongo:27017
+      COURSES_URL: http://courses-service:8000
+    ports:                               # http://localhost:8002/docs is the Swagger UI
+      - "127.0.0.1:${SUBMISSIONS_PORT:-8002}:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      mongo: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+      courses-service: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  grader-service:
+    build: ./grader-service
+    # root + docker.sock: the grader starts one throw-away container per test run.
+    # This is a dev/demo setup, see README "Security notes".
+    user: root
+    environment:
+      <<: *common-env
+      MONGO_URL: mongodb://mongo:27017
+      COURSES_URL: http://courses-service:8000
+      SANDBOX_MODE: docker
+      SANDBOX_IMAGE: python:3.12-alpine
+      MAX_PARALLEL: "2"
+    ports:                               # /health/ready and /metrics
+      - "127.0.0.1:${GRADER_PORT:-8003}:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      mongo: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+      courses-service: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # ---------------------------------------------------------------- edge
+  kong:
+    image: kong:3.8
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /kong/kong.yml
+      KONG_PROXY_LISTEN: 0.0.0.0:8000
+      KONG_ADMIN_LISTEN: "off"          # admin API is not published
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_NGINX_WORKER_PROCESSES: "2"
+    volumes:
+      - ./kong/kong.yml:/kong/kong.yml:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      courses-service: {condition: service_healthy}
+      submissions-service: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+
+  # Static demo page. Backend is graded without it: every call can be made from Postman or scripts/e2e.py.
+  web:
+    image: nginx:alpine
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - kong
+
+volumes:
+  pgdata:
+  mongodata:
+  kafkadata:

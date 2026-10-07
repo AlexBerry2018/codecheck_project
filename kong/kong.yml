@@ -1,0 +1,149 @@
+_format_version: "3.0"
+
+# Kong in DB-less mode = router + load balancer + rate limiter (design doc, "Слой роутинга").
+# NOTE: the HS256 secret below must equal JWT_SECRET of the services (see .env.example).
+
+consumers:
+  - username: codecheck
+    jwt_secrets:
+      - key: codecheck               # matches the `iss` claim issued by courses-service
+        algorithm: HS256
+        secret: dev-only-change-me-dev-only-change-me-0123456789
+
+plugins:
+  # The demo page (frontend/index.html, port 8080) calls Kong from another origin.
+  # Preflight requests are answered here, before the jwt plugin sees them.
+  - name: cors
+    config:
+      origins: ["*"]
+      methods: [GET, POST, PUT, OPTIONS]
+      headers: [Authorization, Content-Type, Idempotency-Key, X-Request-ID]
+      exposed_headers: [Retry-After, Location, Idempotent-Replay, X-Request-ID]
+      max_age: 3600
+
+  - name: correlation-id
+    config:
+      header_name: X-Request-ID
+      generator: uuid
+      echo_downstream: true
+
+upstreams:
+  - name: courses-upstream
+    algorithm: round-robin
+    targets:
+      - target: courses-service:8000     # scale with --scale: DNS A-records become balancer slots
+    healthchecks:
+      active:
+        type: http
+        http_path: /health/ready
+        timeout: 2
+        concurrency: 2
+        healthy: {interval: 5, successes: 2}
+        unhealthy: {interval: 5, http_failures: 2, timeouts: 2, tcp_failures: 2}
+      passive:
+        unhealthy: {http_failures: 3, timeouts: 3, tcp_failures: 3}
+
+  - name: submissions-upstream
+    algorithm: least-connections
+    targets:
+      - target: submissions-service:8000
+    healthchecks:
+      active:
+        type: http
+        http_path: /health/ready
+        timeout: 2
+        concurrency: 2
+        healthy: {interval: 5, successes: 2}
+        unhealthy: {interval: 5, http_failures: 2, timeouts: 2, tcp_failures: 2}
+      passive:
+        unhealthy: {http_failures: 3, timeouts: 3, tcp_failures: 3}
+
+services:
+  # ------------------------------------------------------------ courses-service
+  - name: courses-service
+    host: courses-upstream
+    port: 8000
+    protocol: http
+    connect_timeout: 2000
+    read_timeout: 10000
+    write_timeout: 10000
+    retries: 1
+    routes:
+      # login / register / refresh: public, strict limit against password guessing (5/min per IP)
+      - name: courses-auth
+        paths: [/api/auth]
+        strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 5
+              limit_by: ip
+              policy: redis
+              redis: {host: valkey, port: 6379}
+              fault_tolerant: true       # fail-open if Valkey is down
+              hide_client_headers: false
+
+      - name: courses-api
+        paths: [/api/courses, /api/assignments]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify: [exp]
+          - name: rate-limiting
+            config:
+              minute: 100
+              limit_by: ip
+              policy: redis
+              redis: {host: valkey, port: 6379}
+              fault_tolerant: true
+              hide_client_headers: false
+
+  # ------------------------------------------------------------ submissions-service
+  # (grader-service has no public routes: it is only reachable inside the compose network)
+  - name: submissions-service
+    host: submissions-upstream
+    port: 8000
+    protocol: http
+    connect_timeout: 2000
+    read_timeout: 10000
+    write_timeout: 10000
+    retries: 1                       # safe for POST: Idempotency-Key makes a retry harmless
+    routes:
+      - name: submissions-write
+        methods: [POST, OPTIONS]
+        paths: [/api/submissions]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify: [exp]
+          - name: rate-limiting      # coarse per-token limit; the service enforces the exact per-user limit
+            config:
+              minute: 10
+              limit_by: header
+              header_name: authorization
+              policy: redis
+              redis: {host: valkey, port: 6379}
+              fault_tolerant: true
+              hide_client_headers: false
+
+      - name: submissions-read
+        methods: [GET, OPTIONS]
+        paths: [/api/submissions, /api/leaderboard]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify: [exp]
+          - name: rate-limiting
+            config:
+              minute: 100
+              limit_by: ip
+              policy: redis
+              redis: {host: valkey, port: 6379}
+              fault_tolerant: true
+              hide_client_headers: false

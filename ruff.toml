@@ -1,0 +1,9 @@
+# Same rule set that was used to check the project by hand: real bugs, not style.
+target-version = "py312"
+line-length = 120
+extend-exclude = ["frontend", "postman"]
+
+[lint]
+select = ["F", "E9", "E7", "B"]
+# E402: imports after sys.path tweaks in tests; B008: Depends()/Form() defaults are the FastAPI idiom.
+ignore = ["E402", "B008"]
