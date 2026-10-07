@@ -78,7 +78,7 @@ curl -s $B/api/submissions/1 -H "Authorization: Bearer $TOKEN"
 ## Инструменты разработки
 
 - **Kafka UI** (`provectuslabs/kafka-ui`) в compose: топики `submission.created`, `.retry`, `.dlq`, `submission.graded`,
-  группы консьюмеров и lag. Удобно показывать на защите, как событие проходит путь от отправки до вердикта. UI в режиме
+  группы консьюмеров и lag. Позволяет проследить, как событие проходит путь от отправки до вердикта. UI в режиме
   «только чтение» и без логина, поэтому порт опубликован только на loopback.
 - **pre-commit** (`.pre-commit-config.yaml`): ruff, hadolint, проверка YAML/JSON, поиск приватных ключей.
   `pip install pre-commit && pre-commit install`, один раз по всему репозиторию: `pre-commit run --all-files`
@@ -97,7 +97,7 @@ curl -s $B/api/submissions/1 -H "Authorization: Bearer $TOKEN"
 | `grader-service/` | FastAPI + потоки-consumer: проверка в песочнице, вердикт, логи в MongoDB, retry-топик и DLQ |
 | `kong/kong.yml` | Маршруты, upstream-балансировка с health checks, `jwt`, `rate-limiting` (Valkey), `cors`, `correlation-id` |
 | `postgres/init.sql` | Две базы и по роли на сервис |
-| `frontend/index.html` | Демо-страница без сборки; баллы начисляются только за бэкенд |
+| `frontend/index.html` | Демо-страница без сборки |
 | `scripts/e2e.py`, `postman/` | Приёмочные проверки |
 
 ## API
